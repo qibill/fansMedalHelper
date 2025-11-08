@@ -32,8 +32,9 @@ class BiliUser:
         self.config = config
         self.medals = []  # 用户所有勋章
         self.medalsNeedDo = []  # 当日亲密度未满 30 的勋章
+        self.medalsNeedLike = []  # 当前开播中已熄灭的勋章
 
-        self.session = ClientSession(timeout=ClientTimeout(total=3), trust_env = True)
+        self.session = ClientSession(timeout=ClientTimeout(total=3), trust_env=True)
         self.api = BiliApi(self, self.session)
 
         self.retryTimes = 0  # 点赞任务重试次数
@@ -83,6 +84,7 @@ class BiliUser:
         """
         self.medals.clear()
         self.medalsNeedDo.clear()
+        self.medalsNeedLike.clear()
         async for medal in self.api.getFansMedalandRoomID():
             if self.whiteList == [0]:
                 if medal['medal']['target_id'] in self.bannedList:
@@ -98,6 +100,11 @@ class BiliUser:
             for medal in self.medals
             if medal['medal']['today_feed'] < 30
         ]
+        [
+            self.medalsNeedLike.append(medal)
+            for medal in self.medals
+            if medal['medal']['is_lighted'] == 0 and medal['room_info']['living_status'] == 1
+        ]
 
     async def like_v3(self, failedMedals: list = []):
         if self.config['LIKE_CD'] == 0:
@@ -105,7 +112,7 @@ class BiliUser:
             return
         try:
             if not failedMedals:
-                failedMedals = self.medals
+                failedMedals = self.medalsNeedLike
             if not self.config['ASYNC']:
                 self.log.log("INFO", "同步点赞任务开始....")
                 for index, medal in enumerate(failedMedals):
@@ -118,7 +125,7 @@ class BiliUser:
                         await asyncio.sleep(self.config['LIKE_CD'])
                     self.log.log(
                         "SUCCESS",
-                        f"{medal['anchor_info']['nick_name']} 点赞{i+1}次成功 {index+1}/{len(self.medals)}",
+                        f"{medal['anchor_info']['nick_name']} 点赞{i + 1}次成功 {index + 1}/{len(self.medalsNeedLike)}",
                     )
             else:
                 self.log.log("INFO", "异步点赞任务开始....")
@@ -131,7 +138,7 @@ class BiliUser:
                     await asyncio.gather(*allTasks)
                     self.log.log(
                         "SUCCESS",
-                        f"{medal['anchor_info']['nick_name']} 异步点赞{i+1}次成功",
+                        f"{medal['anchor_info']['nick_name']} 异步点赞{i + 1}次成功",
                     )
                     await asyncio.sleep(self.config['LIKE_CD'])
             await asyncio.sleep(10)
@@ -158,7 +165,7 @@ class BiliUser:
             (await self.api.wearMedal(medal['medal']['medal_id'])) if self.config['WEARMEDAL'] else ...
             try:
                 danmaku = await self.api.sendDanmaku(medal['room_info']['room_id'])
-                successnum+=1
+                successnum += 1
                 self.log.log(
                     "DEBUG",
                     "{} 房间弹幕打卡成功: {} ({}/{})".format(
@@ -190,13 +197,25 @@ class BiliUser:
             tasks = []
             if self.medalsNeedDo:
                 self.log.log("INFO", f"共有 {len(self.medalsNeedDo)} 个牌子未满 30 亲密度")
-                tasks.append(self.like_v3())
+                # tasks.append(self.like_v3())
                 tasks.append(self.watchinglive())
             else:
                 self.log.log("INFO", "所有牌子已满 30 亲密度")
             tasks.append(self.sendDanmaku())
             tasks.append(self.signInGroups())
             await asyncio.gather(*tasks)
+
+    async def like_start(self):
+        if self.isLogin:
+            tasks = []
+            if self.medalsNeedLike:
+                self.log.log("INFO", f"共有 {len(self.medalsNeedLike)} 个开播中的牌子已经熄灭")
+                tasks.append(self.like_v3())
+                # tasks.append(self.watchinglive())
+            else:
+                self.log.log("INFO", "所有开播的牌子已点亮")
+            await asyncio.gather(*tasks)
+
 
     async def sendmsg(self):
         if not self.isLogin:

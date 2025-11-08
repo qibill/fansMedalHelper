@@ -111,12 +111,45 @@ async def main():
         )
         log.info(f"{notifier} 已推送")
 
+async def like_main():
+    messageList = []
+    session = aiohttp.ClientSession(trust_env=True)
+    initTasks = []
+    startTasks = []
+    catchMsg = []
+    for user in users["USERS"]:
+        if user["access_key"]:
+            biliUser = BiliUser(
+                user["access_key"],
+                user.get("white_uid", ""),
+                user.get("banned_uid", ""),
+                config,
+            )
+            initTasks.append(biliUser.init())
+            startTasks.append(biliUser.like_start())
+    try:
+        await asyncio.gather(*initTasks)
+        await asyncio.gather(*startTasks)
+    except Exception as e:
+        log.exception(e)
+        # messageList = messageList + list(itertools.chain.from_iterable(await asyncio.gather(*catchMsg)))
+        messageList.append(f"任务执行失败: {e}")
+    finally:
+        messageList = messageList + list(
+            itertools.chain.from_iterable(await asyncio.gather(*catchMsg))
+        )
+    [log.info(message) for message in messageList]
+    await session.close()
 
 def run(*args, **kwargs):
     loop = asyncio.new_event_loop()
     loop.run_until_complete(main())
     log.info("任务结束，等待下一次执行。")
 
+def like_run(*args, **kwargs):
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(like_main())
+    log.info("任务结束，等待下一次执行。")
 
 async def push_message(session, sendkey, message):
     url = f"https://sctapi.ftqq.com/{sendkey}.send"
@@ -127,6 +160,15 @@ async def push_message(session, sendkey, message):
 
 if __name__ == "__main__":
     cron = users.get("CRON", None)
+    like_cron = users.get("LIKE_CRON", None)
+    if like_cron:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        log.info(f"使用内置点赞定时器 {like_cron}，开启定时点赞任务，等待时间到达后执行。")
+        schedulers = BackgroundScheduler()
+        schedulers.add_job(like_run, CronTrigger.from_crontab(like_cron), misfire_grace_time=3600)
+        schedulers.start()
 
     if cron:
         from apscheduler.schedulers.blocking import BlockingScheduler
@@ -156,3 +198,5 @@ if __name__ == "__main__":
         asyncio.set_event_loop(loop)
         loop.run_until_complete(main())
         log.info("任务结束")
+
+
